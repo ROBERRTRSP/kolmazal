@@ -10,6 +10,7 @@ import {
   getRoleHomePath,
   verifyPin,
 } from "@/lib/auth";
+import { getDatabaseErrorMessage, isDatabaseConfigured } from "@/lib/db-errors";
 import { redirect } from "next/navigation";
 
 const loginSchema = z.object({
@@ -25,6 +26,13 @@ export async function login(formData: FormData) {
 
   if (!parsed.success) {
     return { success: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
+  }
+
+  if (!isDatabaseConfigured()) {
+    return {
+      success: false,
+      error: "DATABASE_URL no está configurada. Agrégala en Vercel → Environment Variables.",
+    };
   }
 
   try {
@@ -54,11 +62,8 @@ export async function login(formData: FormData) {
     });
 
     return { success: true, redirectTo: getRoleHomePath(user.role) };
-  } catch {
-    return {
-      success: false,
-      error: "Error de base de datos. Verifica DATABASE_URL en Vercel.",
-    };
+  } catch (error) {
+    return { success: false, error: getDatabaseErrorMessage(error) };
   }
 }
 
