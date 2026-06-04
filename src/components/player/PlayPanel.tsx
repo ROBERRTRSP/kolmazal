@@ -1,67 +1,121 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { Mic, MicOff, Send } from "lucide-react";
 import { Button, Card, Input } from "@/components/ui";
-import { parsePlay, confirmPlay, cancelPlayDraft } from "@/actions/player";
+import { processVoiceCommand } from "@/actions/voice";
+import type { VoiceCommandResult } from "@/lib/voice/voice-types";
 
 type PlayPanelProps = {
   onConfirmed?: () => void;
 };
 
+type DraftState = {
+  items: Array<{ lottery: string; playType: string; number1: string; amount: number }>;
+  totalAmount: number;
+  message?: string;
+};
+
 export function PlayPanel({ onConfirmed }: PlayPanelProps) {
+  const router = useRouter();
   const [text, setText] = useState("");
   const [listening, setListening] = useState(false);
-  const [draft, setDraft] = useState<{
-    items: Array<{ lottery: string; playType: string; number1: string; amount: number }>;
-    totalAmount: number;
-    message?: string;
-  } | null>(null);
+  const [draft, setDraft] = useState<DraftState | null>(null);
+  const [voiceReply, setVoiceReply] = useState("");
+  const [lastCommand, setLastCommand] = useState<VoiceCommandResult | null>(null);
   const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
 
-  const handleParse = (input: string) => {
-    if (!input.trim()) return;
-    setError("");
-    startTransition(async () => {
-      const result = await parsePlay(input);
-      if (!result.success) {
-        setError(result.error ?? "No se pudo interpretar");
-        setDraft(null);
-        return;
-      }
-      if (result.needsConfirmation && result.items) {
+  const handleVoiceResult = (result: Awaited<ReturnType<typeof processVoiceCommand>>) => {
+    setLastCommand(result.command);
+    setVoiceReply(result.message);
+
+    if (result.redirectTo) {
+      router.push(result.redirectTo);
+      return;
+    }
+
+    if (result.needsMoreInfo) {
+      setDraft(null);
+      return;
+    }
+
+    if (result.data && "items" in (result.data as object)) {
+      const data = result.data as {
+        items: DraftState["items"];
+        totalAmount: number;
+      };
+      setDraft({
+        items: data.items,
+        totalAmount: data.totalAmount,
+        message: result.message,
+      });
+      return;
+    }
+
+    if (result.requiresConfirmation && result.data) {
+      const data = result.data as {
+        items?: DraftState["items"];
+        totalAmount?: number;
+      };
+      if (data.items) {
         setDraft({
-          items: result.items,
-          totalAmount: result.totalAmount ?? 0,
+          items: data.items,
+          totalAmount: data.totalAmount ?? 0,
           message: result.message,
         });
-      } else if (result.parsed?.intent === "CONFIRM") {
-        handleConfirm();
-      } else if (result.parsed?.intent === "CANCEL") {
-        handleCancel();
+      }
+      return;
+    }
+
+    if (result.success && !result.requiresConfirmation) {
+      setDraft(null);
+      onConfirmed?.();
+      router.refresh();
+    }
+  };
+
+  const handleSubmit = (input: string) => {
+    if (!input.trim()) return;
+    setError("");
+    setVoiceReply("");
+    startTransition(async () => {
+      try {
+        const result = await processVoiceCommand(input);
+        if (!result.success && !result.needsMoreInfo) {
+          setError(result.message);
+          setDraft(null);
+          return;
+        }
+        handleVoiceResult(result);
+      } catch {
+        setError("Error al procesar el comando");
       }
     });
   };
 
   const handleConfirm = () => {
     startTransition(async () => {
-      const result = await confirmPlay();
+      const result = await processVoiceCommand("confirma");
       if (!result.success) {
-        setError(result.error ?? "Error al confirmar");
+        setError(result.message);
         return;
       }
       setDraft(null);
       setText("");
+      setVoiceReply(result.message);
       onConfirmed?.();
+      router.refresh();
     });
   };
 
   const handleCancel = () => {
     startTransition(async () => {
-      await cancelPlayDraft();
+      const result = await processVoiceCommand("cancela");
       setDraft(null);
       setText("");
+      setVoiceReply(result.message);
     });
   };
 
@@ -73,7 +127,9 @@ export function PlayPanel({ onConfirmed }: PlayPanelProps) {
         onstart: (() => void) | null;
         onend: (() => void) | null;
         onerror: (() => void) | null;
-        onresult: ((event: { results: { [index: number]: { [index: number]: { transcript: string } } } }) => void) | null;
+        onresult: ((event: {
+          results: { [index: number]: { [index: number]: { transcript: string } } };
+        }) => void) | null;
         start: () => void;
       };
       webkitSpeechRecognition?: new () => {
@@ -82,7 +138,9 @@ export function PlayPanel({ onConfirmed }: PlayPanelProps) {
         onstart: (() => void) | null;
         onend: (() => void) | null;
         onerror: (() => void) | null;
-        onresult: ((event: { results: { [index: number]: { [index: number]: { transcript: string } } } }) => void) | null;
+        onresult: ((event: {
+          results: { [index: number]: { [index: number]: { transcript: string } } };
+        }) => void) | null;
         start: () => void;
       };
     };
@@ -107,7 +165,7 @@ export function PlayPanel({ onConfirmed }: PlayPanelProps) {
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript;
       setText(transcript);
-      handleParse(transcript);
+      handleSubmit(transcript);
     };
 
     recognition.start();
@@ -129,13 +187,13 @@ export function PlayPanel({ onConfirmed }: PlayPanelProps) {
         </button>
       </div>
       <p className="text-center text-sm text-gray-500">
-        {listening ? "Escuchando..." : "Toca para hablar o escribe abajo"}
+        {listening ? "Escuchando..." : "ChatVoz — habla o escribe tu comando"}
       </p>
 
       <form
         onSubmit={(e) => {
           e.preventDefault();
-          handleParse(text);
+          handleSubmit(text);
         }}
         className="flex gap-2"
       >
@@ -148,6 +206,17 @@ export function PlayPanel({ onConfirmed }: PlayPanelProps) {
           <Send size={18} />
         </Button>
       </form>
+
+      {voiceReply && !error && (
+        <div className="p-3 rounded-2xl bg-blue-50 text-blue-800 text-sm">{voiceReply}</div>
+      )}
+
+      {lastCommand && process.env.NODE_ENV === "development" && (
+        <details className="text-xs text-gray-400">
+          <summary className="cursor-pointer">Debug ChatVoz</summary>
+          <pre className="mt-1 overflow-auto">{JSON.stringify(lastCommand, null, 2)}</pre>
+        </details>
+      )}
 
       {error && (
         <div className="p-3 rounded-2xl bg-red-50 text-red-700 text-sm">{error}</div>
