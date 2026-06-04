@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { login } from "@/actions/auth";
 import { Button, Card, Input } from "@/components/ui";
 
 export default function LoginPage() {
+  const router = useRouter();
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -13,9 +15,14 @@ export default function LoginPage() {
     setError("");
     try {
       const result = await login(formData);
-      if (result?.error) setError(result.error);
+      if (result?.error) {
+        setError(result.error);
+      } else if (result?.redirectTo) {
+        router.push(result.redirectTo);
+        router.refresh();
+      }
     } catch {
-      // redirect throws
+      setError("Error inesperado al iniciar sesión");
     } finally {
       setLoading(false);
     }

@@ -27,29 +27,39 @@ export async function login(formData: FormData) {
     return { success: false, error: parsed.error.issues[0]?.message ?? "Datos inválidos" };
   }
 
-  const user = await prisma.user.findUnique({
-    where: { phone: parsed.data.phone },
-  });
+  try {
+    const user = await prisma.user.findUnique({
+      where: { phone: parsed.data.phone },
+    });
 
-  if (!user || !user.isActive) {
-    return { success: false, error: "Usuario no encontrado" };
+    if (!user || !user.isActive) {
+      return {
+        success: false,
+        error: "Usuario no encontrado. ¿Corriste db:seed en la base de datos?",
+      };
+    }
+
+    const valid = await verifyPin(parsed.data.pin, user.pinHash);
+    if (!valid) {
+      return { success: false, error: "PIN incorrecto" };
+    }
+
+    await createSession(user.id);
+    await createAuditLog({
+      actorId: user.id,
+      actorRole: user.role,
+      action: "LOGIN",
+      entityType: "User",
+      entityId: user.id,
+    });
+
+    return { success: true, redirectTo: getRoleHomePath(user.role) };
+  } catch {
+    return {
+      success: false,
+      error: "Error de base de datos. Verifica DATABASE_URL en Vercel.",
+    };
   }
-
-  const valid = await verifyPin(parsed.data.pin, user.pinHash);
-  if (!valid) {
-    return { success: false, error: "PIN incorrecto" };
-  }
-
-  await createSession(user.id);
-  await createAuditLog({
-    actorId: user.id,
-    actorRole: user.role,
-    action: "LOGIN",
-    entityType: "User",
-    entityId: user.id,
-  });
-
-  redirect(getRoleHomePath(user.role));
 }
 
 export async function logout() {
