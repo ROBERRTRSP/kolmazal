@@ -1,0 +1,454 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  PLAYER
+  CASHIER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum LotteryStatus {
+  OPEN
+  CLOSED
+  WAITING_RESULT
+  RESULT_READY
+  CANCELLED
+}
+
+enum PlayType {
+  QUINIELA
+  PALE
+  TRIPLETA
+}
+
+enum TicketStatus {
+  ACTIVE
+  WON
+  LOST
+  PAID
+  CANCELLED
+  SETTLED
+}
+
+enum PlayOrderStatus {
+  PENDING_PAYMENT
+  EXECUTED
+  EXPIRED
+  CANCELLED
+  REJECTED
+}
+
+enum RechargeCodeStatus {
+  PENDING
+  CLAIMED
+  EXPIRED
+  CANCELLED
+}
+
+enum WalletTransactionType {
+  DEPOSIT
+  BET
+  WIN
+  REFUND
+  WITHDRAWAL
+  CASHIER_PAYMENT
+}
+
+enum ResultStatus {
+  WAITING
+  FETCHED
+  PENDING_VERIFY
+  VERIFIED
+  DISPUTED
+  SETTLED
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  CREATE_PLAY_DRAFT
+  CONFIRM_TICKET
+  CREATE_PENDING_ORDER
+  CASHIER_EXECUTE_ORDER
+  CREATE_RECHARGE_QR
+  CLAIM_RECHARGE_QR
+  RESULT_FETCHED
+  RESULT_VERIFIED
+  PRIZE_SETTLED
+  BALANCE_UPDATED
+  ADMIN_UPDATE_SETTING
+  CASHIER_CLOSE_SHIFT
+}
+
+enum ShiftStatus {
+  OPEN
+  CLOSED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  phone        String   @unique
+  pinHash      String
+  role         Role
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sessions           Session[]
+  playerProfile      PlayerProfile?
+  cashierProfile     CashierProfile?
+  adminProfile       AdminProfile?
+  tickets            Ticket[]
+  playOrders         PlayOrder[]
+  walletTransactions WalletTransaction[]
+  rechargeCodesCreated RechargeCode[] @relation("RechargeCreatedBy")
+  rechargeCodesClaimed RechargeCode[] @relation("RechargeClaimedBy")
+  cashierShifts      CashierShift[]
+  auditLogs          AuditLog[]
+  notifications      NotificationEvent[]
+  cashierOrders      PlayOrder[] @relation("CashierOrders")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  ipAddress String?
+  userAgent String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+}
+
+model PlayerProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  balance   Decimal  @default(0) @db.Decimal(12, 2)
+  qrToken   String   @unique @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model CashierProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  stationId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model AdminProfile {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Lottery {
+  id        String        @id @default(cuid())
+  name      String        @unique
+  country   String        @default("DO")
+  drawName  String
+  drawTime  String
+  closeTime String
+  timezone  String        @default("America/Santo_Domingo")
+  status    LotteryStatus @default(CLOSED)
+  isActive  Boolean       @default(true)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  schedules     LotterySchedule[]
+  ticketItems   TicketItem[]
+  playOrderItems PlayOrderItem[]
+  results       LotteryResult[]
+  aliases       LotteryAlias[]
+
+  @@index([status])
+}
+
+model LotterySchedule {
+  id        String   @id @default(cuid())
+  lotteryId String
+  dayOfWeek Int
+  drawTime  String
+  closeTime String
+  isActive  Boolean  @default(true)
+
+  lottery Lottery @relation(fields: [lotteryId], references: [id], onDelete: Cascade)
+
+  @@unique([lotteryId, dayOfWeek])
+}
+
+model Ticket {
+  id               String       @id @default(cuid())
+  ticketNumber     String       @unique
+  verificationCode String       @unique
+  qrToken          String       @unique @default(cuid())
+  playerId         String
+  totalAmount      Decimal      @db.Decimal(12, 2)
+  status           TicketStatus @default(ACTIVE)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  player           User              @relation(fields: [playerId], references: [id])
+  items            TicketItem[]
+  playOrder        PlayOrder?
+  prizeSettlements PrizeSettlement[]
+
+  @@index([playerId])
+  @@index([status])
+}
+
+model TicketItem {
+  id          String   @id @default(cuid())
+  ticketId    String
+  lotteryId   String
+  playType    PlayType
+  number1     String
+  number2     String?
+  number3     String?
+  amount      Decimal  @db.Decimal(12, 2)
+  odds        Int
+  possibleWin Decimal  @db.Decimal(12, 2)
+  isWinner    Boolean  @default(false)
+  winAmount   Decimal? @db.Decimal(12, 2)
+
+  ticket  Ticket  @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  lottery Lottery @relation(fields: [lotteryId], references: [id])
+
+  @@index([ticketId])
+  @@index([lotteryId])
+}
+
+model PlayOrder {
+  id           String          @id @default(cuid())
+  orderNumber  String          @unique
+  playerId     String
+  totalAmount  Decimal         @db.Decimal(12, 2)
+  status       PlayOrderStatus @default(PENDING_PAYMENT)
+  paymentToken String          @unique @default(cuid())
+  expiresAt    DateTime
+  cashierId    String?
+  ticketId     String?         @unique
+  paidAt       DateTime?
+  executedAt   DateTime?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  player  User            @relation(fields: [playerId], references: [id])
+  cashier User?           @relation("CashierOrders", fields: [cashierId], references: [id])
+  ticket  Ticket?         @relation(fields: [ticketId], references: [id])
+  items   PlayOrderItem[]
+
+  @@index([playerId])
+  @@index([status])
+  @@index([paymentToken])
+}
+
+model PlayOrderItem {
+  id          String   @id @default(cuid())
+  playOrderId String
+  lotteryId   String
+  playType    PlayType
+  number1     String
+  number2     String?
+  number3     String?
+  amount      Decimal  @db.Decimal(12, 2)
+  odds        Int
+  possibleWin Decimal  @db.Decimal(12, 2)
+
+  playOrder PlayOrder @relation(fields: [playOrderId], references: [id], onDelete: Cascade)
+  lottery   Lottery   @relation(fields: [lotteryId], references: [id])
+
+  @@index([playOrderId])
+}
+
+model RechargeCode {
+  id         String             @id @default(cuid())
+  code       String             @unique
+  token      String             @unique @default(cuid())
+  amount     Decimal            @db.Decimal(12, 2)
+  status     RechargeCodeStatus @default(PENDING)
+  createdBy  String
+  claimedBy  String?
+  expiresAt  DateTime
+  claimedAt  DateTime?
+  printedAt  DateTime?
+  printCount Int                @default(0)
+  createdAt  DateTime           @default(now())
+
+  creator User  @relation("RechargeCreatedBy", fields: [createdBy], references: [id])
+  claimer User? @relation("RechargeClaimedBy", fields: [claimedBy], references: [id])
+
+  @@index([token])
+  @@index([status])
+}
+
+model WalletTransaction {
+  id            String                @id @default(cuid())
+  userId        String
+  type          WalletTransactionType
+  amount        Decimal               @db.Decimal(12, 2)
+  balanceBefore Decimal               @db.Decimal(12, 2)
+  balanceAfter  Decimal               @db.Decimal(12, 2)
+  referenceType String?
+  referenceId   String?
+  description   String?
+  createdAt     DateTime              @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model LotteryResult {
+  id          String       @id @default(cuid())
+  lotteryId   String
+  drawDate    DateTime     @db.Date
+  number1     String
+  number2     String?
+  number3     String?
+  status      ResultStatus @default(WAITING)
+  sourceId    String?
+  verifiedAt  DateTime?
+  settledAt   DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  lottery          Lottery           @relation(fields: [lotteryId], references: [id])
+  source           ResultSource?     @relation(fields: [sourceId], references: [id])
+  prizeSettlements PrizeSettlement[]
+
+  @@unique([lotteryId, drawDate])
+  @@index([status])
+}
+
+model ResultSource {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  url       String?
+  isActive  Boolean  @default(true)
+  priority  Int      @default(1)
+  createdAt DateTime @default(now())
+
+  results    LotteryResult[]
+  fetchLogs  ResultFetchLog[]
+}
+
+model ResultFetchLog {
+  id        String   @id @default(cuid())
+  sourceId  String
+  status    String
+  message   String?
+  rawData   String?
+  createdAt DateTime @default(now())
+
+  source ResultSource @relation(fields: [sourceId], references: [id])
+}
+
+model LotteryAlias {
+  id        String @id @default(cuid())
+  lotteryId String
+  alias     String @unique
+
+  lottery Lottery @relation(fields: [lotteryId], references: [id], onDelete: Cascade)
+}
+
+model PrizeSettlement {
+  id        String   @id @default(cuid())
+  ticketId  String
+  resultId  String
+  amount    Decimal  @db.Decimal(12, 2)
+  settledAt DateTime @default(now())
+
+  ticket Ticket        @relation(fields: [ticketId], references: [id])
+  result LotteryResult @relation(fields: [resultId], references: [id])
+
+  @@unique([ticketId, resultId])
+}
+
+model CashierShift {
+  id              String      @id @default(cuid())
+  cashierId       String
+  status          ShiftStatus @default(OPEN)
+  openedAt        DateTime    @default(now())
+  closedAt        DateTime?
+  totalSales      Decimal     @default(0) @db.Decimal(12, 2)
+  totalRecharges  Decimal     @default(0) @db.Decimal(12, 2)
+  totalPrizesPaid Decimal     @default(0) @db.Decimal(12, 2)
+  ordersExecuted  Int         @default(0)
+
+  cashier User @relation(fields: [cashierId], references: [id])
+
+  @@index([cashierId])
+  @@index([status])
+}
+
+model AuditLog {
+  id         String      @id @default(cuid())
+  actorId    String?
+  actorRole  Role?
+  action     AuditAction
+  entityType String?
+  entityId   String?
+  oldValue   String?
+  newValue   String?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+
+  @@index([actorId])
+  @@index([action])
+  @@index([createdAt])
+}
+
+model NotificationEvent {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model SystemSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+}
+
+model PlayDraft {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  draftJson String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
